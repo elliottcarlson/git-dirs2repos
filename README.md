@@ -58,6 +58,5 @@ To create private repos for all subdirectories in the current directory on
 GitHub Enterprise under the `my-organization` organization:
 
 ```sh
-git dirs2repos -g https://github.enterprise.host/api/v3/ -u my-username .
---private -o my-organization
+git dirs2repos -g https://github.enterprise.host/api/v3/ -u my-username . --private -o my-organization
 ```
