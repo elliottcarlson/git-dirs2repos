@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+## It's recommended to create an access token instead of using your password
+## and this bypasses the need for 2FA checking which is finnicky. You can 
+## create a new access token at https://github.com/settings/tokens; use the
+## token where you would normally use a password.
+
+# Defaults
+USERNAME=$(git config user.email)
+GITHUB="https://api.github.com"
+PATHS=()
+PRIVATE="false"
+ORGANIZATION=""
+
+# Display help
+function _usage() {
+    echo "Usage: $0 [options] <path>..."
+    echo
+    echo "  -u|--username <username> Set the GitHub username"
+    echo "  -p|--password <password> Set the GitHub password"
+    echo "  -g|--github <host>       Set the GitHub host (for GHE)"
+    echo "  -o|--org <organization>  Create repos under organization"
+    echo "  --private                Create remote repos as private repos"
+    echo "  -h|--help                Show this screen"
+    echo
+    echo "It is recommended to create an access token instead of using a"
+    echo "password. Please see https://help.github.com/articles/creating-an-access-token-for-command-line-use/"
+    exit
+}
+
+# JSON helper function
+function _jsonval() {
+    key=$1
+    awk  -F"[,:}]" '{for(i=1;i<=NF;i++){if($i~/'$key'\042/){print $(i+1)}}}' | tr -d '"' | sed -n 1p
+}
+
+# Parse CLI options
+while [[ $# -gt 0 ]]; do
+    key="$1"
+
+    case $key in
+	-u|--username)
+	USERNAME="$2"
+	shift
+	;;
+	-p|--password)
+	PASSWORD="$2"
+	shift
+	;;
+        -g|--github)
+	GITHUB=${2%/}
+	shift
+	;;
+	-o|--org)
+	ORGANIZATION="$2"
+	shift
+	;;
+        -h|--help)
+	_usage
+	;;
+        --private)
+	PRIVATE="true"
+	;;
+        *)
+	if [ -d $key ]; then
+	    PATHS+=$key
+	else
+	    echo "ERR: Invalid path: $key"
+	    _usage
+	fi
+	;;
+    esac
+    shift
+done
+
+# Check if any paths were specified
+if [ ${#PATHS[@]} -eq 0 ]; then
+    echo "ERR: No paths specified."
+    _usage
+    exit
+fi
+
+# Check if password was supplied
+if [ -z ${PASSWORD+x} ]; then
+    read -esp "Enter the GitHub password or access token for $USERNAME: " PASSWORD
+    echo
+fi
+
+CURL_OPT="-s -u $USERNAME:$PASSWORD"
+
+
+# Test login
+_test_login=$(curl $CURL_OPT $GITHUB)
+
+# Do they require 2fa?
+if [[ $_test_login == *"Must specify two-factor authentication"* ]]; then
+    echo "ERR: Account requires 2FA, please create an access token."
+    _usage
+fi
+
+if [[ $_test_login == *"Bad credentials"* ]]; then
+    echo "ERR: Invalid username or password."
+    _usage
+fi
+
+# Get the user login name from GH
+GH_USERNAME=$(curl $CURL_OPT $GITHUB/user | _jsonval login | xargs)
+
+# Loop through paths, create remote repo and push the repos up
+for path in "${PATHS[@]}"; do
+    for folder in $(find $path -maxdepth 1 -type d ! -path $path); do
+	REPO_NAME=$(basename $folder)
+	JSON="{\"name\":\"$REPO_NAME\",\"auto_init\":false,\"private\":$PRIVATE}"
+	echo "Creating remote repo '$REPO_NAME'..."
+	if [[ $ORGANIZATION ]]; then
+	    curl $CURL_OPT $GITHUB/orgs/$ORGANIZATION/repos -d $JSON &>/dev/null
+	else
+	    curl $CURL_OPT $GITHUB/user/repos -d $JSON &>/dev/null
+	fi
+	cd $folder
+	SCHEMA=$(echo $GITHUB | awk -F/ '{print $1}')
+	BASEHOST=$(echo $GITHUB | awk -F/ '{print $3}')
+	git init &>/dev/null
+	git add . &>/dev/null
+	git commit -m ":sunrise:" &>/dev/null
+	if [[ $ORGANIZATION ]]; then
+	    git push $SCHEMA//$GH_USERNAME:$PASSWORD@$BASEHOST/$ORGANIZATION/$REPO_NAME.git --all &>/dev/null
+	else
+	    git push $SCHEMA//$GH_USERNAME:$PASSWORD@$BASEHOST/$GH_USERNAME/$REPO_NAME.git --all &>/dev/null
+	fi
+	cd -
+    done
+done
